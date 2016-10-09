@@ -167,7 +167,6 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
     certchain = [result]
     if chain:
         for header in headers.get_all("Link"):
-            log.info("Header ({0})!".format(header))
             m = re.search(r'^\s*<([^>]*)>.*;\s*rel="up"', header)
             if m:
                 log.info("Retrieving Intermediate Certificate ({0})!".format(m.group(1)))
