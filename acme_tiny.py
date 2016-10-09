@@ -82,7 +82,7 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
     log.info("Registering account...")
     payload = {
         "resource": "new-reg",
-        "agreement": "https://letsencrypt.org/documents/LE-SA-v1.0.1-July-27-2015.pdf",
+        "agreement": "https://letsencrypt.org/documents/LE-SA-v1.1.1-August-1-2016.pdf",
     }
     if account_email:
         payload["contact"] = ["mailto:{0}".format(account_email)]
