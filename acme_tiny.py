@@ -3,9 +3,8 @@ import argparse, subprocess, json, os, sys, base64, binascii, time, hashlib, re,
 try:
     from urllib.request import Request, urlopen # Python 3
 except ImportError:
-    from urllib2 import Request, urlopen # Python 2
+    raise ImportError('RIP Python2')
 
-#DEFAULT_CA = "https://acme-staging.api.letsencrypt.org"
 DEFAULT_CA = "https://acme-v01.api.letsencrypt.org"
 
 LOGGER = logging.getLogger(__name__)
@@ -167,12 +166,12 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
 
     certchain = [result]
     if chain:
-        def parse_link_header(line):
-            m = re.search(r"^Link:\s*<([^>]*)>(?:\s*;\s*(.*))?\r\n$", line)
-            return (m.group(1), { a[0]: a[1].strip('"') for a in [attr.split("=") for attr in m.group(2).split("\s*;\s*")] })
-
-        up = [link for link, attr in [parse_link_header(l) for l in headers.getallmatchingheaders("Link")] if attr['rel'] == 'up']
-        certchain += [urlopen(url).read() for url in up]
+        for header in headers.get_all("Link"):
+            log.info("Header ({0})!".format(header))
+            m = re.search(r'^\s*<([^>]*)>.*;\s*rel="up"', header)
+            if m:
+                log.info("Retrieving Intermediate Certificate ({0})!".format(m.group(1)))
+                certchain.append(urlopen(m.group(1)).read())
 
     # return signed certificate!
     log.info("Certificate signed!")
