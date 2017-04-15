@@ -58,9 +58,9 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
         })
         try:
             resp = urlopen(_request(url), signed_request.encode('utf8'))
-            core, result, headers = resp.getcode(), resp.read(), resp.info()
+            code, result, headers = resp.getcode(), resp.read(), resp.info()
         except (HTTPError, URLError) as e:
-            code, result = getattr(e, "code", None), getattr(e, "read", e.reason.__str__)()
+            code, result, headers = getattr(e, "code", None), getattr(e, "read", e.reason.__str__)(), getattr(e, "info", e.reason.__str__)()
         finally:
             try:
                 message = return_codes[code]
@@ -103,8 +103,8 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
         log.info("Verifying {0}...".format(domain))
 
         # get new challenge
-        code, result, headers = _send_signed_request(CA + "/acme/new-authz", 
-            {"resource": "new-authz", "identifier": {"type": "dns", "value": domain},},
+        result, headers = _send_signed_request(CA + "/acme/new-authz", 
+            {"resource": "new-authz", "identifier": {"type": "dns", "value": domain}},
             {201: None}, "Error requesting challenges: {code} {result}")
 
         # make the challenge file
@@ -150,7 +150,7 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
 
     # get the new certificate
     log.info("Signing certificate...")
-    result, headers = _send_signed_request(CA + "/acme/new-cert", {"resource": "new-cert", "csr": _b64(_openssl("req", ["-in", csr, "-outform", "DER"])),},
+    result, headers = _send_signed_request(CA + "/acme/new-cert", {"resource": "new-cert", "csr": _b64(_openssl("req", ["-in", csr, "-outform", "DER"]))},
         {201: None}, "Error signing certificate: {code} {result}")
 
     certchain = [result]
