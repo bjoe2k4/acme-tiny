@@ -2,6 +2,7 @@
 import argparse, subprocess, json, os, sys, base64, binascii, time, hashlib, re, copy, textwrap, logging
 try:
     from urllib.request import Request, urlopen, URLError, HTTPError # Python 3
+    import http.client as httplib
 except ImportError:
     raise ImportError('RIP Python2')
 
@@ -84,9 +85,13 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
 
     # get the certificate domains and expiration
     log.info("Registering account...")
+
+    agreement_conn = httplib.HTTPSConnection(CA.split('/')[-1])
+    agreement_conn.request("HEAD", "/terms")
+
     payload = {
         "resource": "new-reg",
-        "agreement": "https://letsencrypt.org/documents/LE-SA-v1.1.1-August-1-2016.pdf",
+        "agreement": agreement_conn.getresponse().getheader("location"),
     }
     if account_email:
         payload["contact"] = ["mailto:{0}".format(account_email)]
