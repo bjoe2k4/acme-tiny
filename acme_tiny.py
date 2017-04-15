@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import argparse, subprocess, json, os, sys, base64, binascii, time, hashlib, re, copy, textwrap, logging
 try:
-    from urllib.request import Request, urlopen # Python 3
+    from urllib.request import Request, urlopen, URLError, HTTPError # Python 3
 except ImportError:
     raise ImportError('RIP Python2')
 
@@ -46,20 +46,28 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
     thumbprint = _b64(hashlib.sha256(accountkey_json.encode('utf8')).digest())
 
     # helper function make signed requests
-    def _send_signed_request(url, payload):
+    def _send_signed_request(url, payload, return_codes, error_message):
         payload64 = _b64(json.dumps(payload).encode('utf8'))
         protected = copy.deepcopy(header)
         protected["nonce"] = urlopen(_request(CA + "/directory")).info().get('Replay-Nonce')
         protected64 = _b64(json.dumps(protected).encode('utf8'))
-        data = json.dumps({
+        signed_request = json.dumps({
             "header": header, "protected": protected64, "payload": payload64,
             "signature": _b64(_openssl("dgst", ["-sha256", "-sign", account_key], communicate="{0}.{1}".format(protected64, payload64).encode("utf8")))
         })
         try:
-            resp = urlopen(_request(url), data.encode('utf8'))
-            return resp.getcode(), resp.read(), resp.info()
-        except IOError as e:
-            return getattr(e, "code", None), getattr(e, "read", e.__str__)(), None
+            resp = urlopen(_request(url), signed_request.encode('utf8'))
+            core, result, headers = resp.getcode(), resp.read(), resp.info()
+        except (HTTPError, URLError) as e:
+            code, result = getattr(e, "code", None), getattr(e, "read", e.reason.__str__)()
+        finally:
+            try:
+                message = return_codes[code]
+                if message is not None:
+                    log.info(message)
+                return result, headers
+            except KeyError:
+                raise ValueError(error_message.format(code=code, result=result))
 
     # find domains
     log.info("Parsing CSR...")
@@ -82,25 +90,17 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
     }
     if account_email:
         payload["contact"] = ["mailto:{0}".format(account_email)]
-    code, result, headers = _send_signed_request(CA + "/acme/new-reg", payload)
-    if code == 201:
-        log.info("Registered!")
-    elif code == 409:
-        log.info("Already registered!")
-    else:
-        raise ValueError("Error registering: {0} {1}".format(code, result))
+
+    result, headers = _send_signed_request(CA + "/acme/new-reg", payload, {201: "Registered!", 409: "Already registered!"}, "Error registering: {code} {result}")
 
     # verify each domain
     for domain in domains:
         log.info("Verifying {0}...".format(domain))
 
         # get new challenge
-        code, result, headers = _send_signed_request(CA + "/acme/new-authz", {
-            "resource": "new-authz",
-            "identifier": {"type": "dns", "value": domain},
-        })
-        if code != 201:
-            raise ValueError("Error requesting challenges: {0} {1}".format(code, result))
+        code, result, headers = _send_signed_request(CA + "/acme/new-authz", 
+            {"resource": "new-authz", "identifier": {"type": "dns", "value": domain},},
+            {201: None}, "Error requesting challenges: {code} {result}")
 
         # make the challenge file
         challenge = [c for c in json.loads(result.decode('utf8'))['challenges'] if c['type'] == "http-01"][0]
@@ -122,12 +122,8 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
                 wellknown_path, wellknown_url))
 
         # notify challenge are met
-        code, result, headers = _send_signed_request(challenge['uri'], {
-            "resource": "challenge",
-            "keyAuthorization": keyauthorization,
-        })
-        if code != 202:
-            raise ValueError("Error triggering challenge: {0} {1}".format(code, result))
+        result, headers = _send_signed_request(challenge['uri'], {"resource": "challenge","keyAuthorization": keyauthorization,},
+            {202: None}, "Error triggering challenge: {code} {result}")
 
         # wait for challenge to be verified
         while True:
@@ -149,11 +145,8 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
 
     # get the new certificate
     log.info("Signing certificate...")
-    code, result, headers = _send_signed_request(CA + "/acme/new-cert", {
-        "resource": "new-cert", "csr": _b64(_openssl("req", ["-in", csr, "-outform", "DER"])),
-    })
-    if code != 201:
-        raise ValueError("Error signing certificate: {0} {1}".format(code, result))
+    result, headers = _send_signed_request(CA + "/acme/new-cert", {"resource": "new-cert", "csr": _b64(_openssl("req", ["-in", csr, "-outform", "DER"])),},
+        {201: None}, "Error signing certificate: {code} {result}")
 
     certchain = [result]
     if chain:
