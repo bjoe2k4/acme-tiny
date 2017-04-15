@@ -17,27 +17,28 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
     def _b64(b):
         return base64.urlsafe_b64encode(b).decode('utf8').replace("=", "")
 
+    # helper function run openssl subprocess
+    def _openssl(command, options, communicate=None):
+        openssl = subprocess.Popen(["openssl", command] + options, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = openssl.communicate(communicate)
+        if openssl.returncode != 0:
+            raise IOError("OpenSSL Error: {0}".format(err))
+        return out
+
     # setting own headers for every request
     def _request(url):
         return Request(url, headers = {'User-Agent' : USER_AGENT, 'Accept' : '*/*'})
 
     # parse account key to get public key
     log.info("Parsing account key...")
-    proc = subprocess.Popen(["openssl", "rsa", "-in", account_key, "-noout", "-text"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out, err = proc.communicate()
-    if proc.returncode != 0:
-        raise IOError("OpenSSL Error: {0}".format(err))
     pub_hex, pub_exp = re.search(
         r"modulus:\n\s+00:([a-f0-9\:\s]+?)\npublicExponent: ([0-9]+)",
-        out.decode('utf8'), re.MULTILINE|re.DOTALL).groups()
+        _openssl("rsa", ["-in", account_key, "-noout", "-text"]).decode('utf8'), re.MULTILINE|re.DOTALL).groups()
     pub_exp = "{0:x}".format(int(pub_exp))
     pub_exp = "0{0}".format(pub_exp) if len(pub_exp) % 2 else pub_exp
     header = {
-        "alg": "RS256",
-        "jwk": {
-            "e": _b64(binascii.unhexlify(pub_exp.encode("utf-8"))),
-            "kty": "RSA",
+        "alg": "RS256", "jwk": {
+            "e": _b64(binascii.unhexlify(pub_exp.encode("utf-8"))), "kty": "RSA",
             "n": _b64(binascii.unhexlify(re.sub(r"(\s|:)", "", pub_hex).encode("utf-8"))),
         },
     }
@@ -50,14 +51,9 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
         protected = copy.deepcopy(header)
         protected["nonce"] = urlopen(_request(CA + "/directory")).info().get('Replay-Nonce')
         protected64 = _b64(json.dumps(protected).encode('utf8'))
-        proc = subprocess.Popen(["openssl", "dgst", "-sha256", "-sign", account_key],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out, err = proc.communicate("{0}.{1}".format(protected64, payload64).encode('utf8'))
-        if proc.returncode != 0:
-            raise IOError("OpenSSL Error: {0}".format(err))
         data = json.dumps({
-            "header": header, "protected": protected64,
-            "payload": payload64, "signature": _b64(out),
+            "header": header, "protected": protected64, "payload": payload64,
+            "signature": _b64(_openssl("dgst", ["-sha256", "-sign", account_key], communicate="{0}.{1}".format(protected64, payload64).encode("utf8")))
         })
         try:
             resp = urlopen(_request(url), data.encode('utf8'))
@@ -67,16 +63,12 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
 
     # find domains
     log.info("Parsing CSR...")
-    proc = subprocess.Popen(["openssl", "req", "-in", csr, "-noout", "-text"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out, err = proc.communicate()
-    if proc.returncode != 0:
-        raise IOError("Error loading {0}: {1}".format(csr, err))
+    csr_dump = _openssl("req", ["-in", csr, "-noout", "-text"]).decode("utf8")
     domains = set([])
-    common_name = re.search(r"Subject:.*? CN ?= ?([^\s,;/]+)", out.decode('utf8'))
+    common_name = re.search(r"Subject:.*? CN ?= ?([^\s,;/]+)", csr_dump)
     if common_name is not None:
         domains.add(common_name.group(1))
-    subject_alt_names = re.search(r"X509v3 Subject Alternative Name: \n +([^\n]+)\n", out.decode('utf8'), re.MULTILINE|re.DOTALL)
+    subject_alt_names = re.search(r"X509v3 Subject Alternative Name: \n +([^\n]+)\n", csr_dump, re.MULTILINE|re.DOTALL)
     if subject_alt_names is not None:
         for san in subject_alt_names.group(1).split(", "):
             if san.startswith("DNS:"):
@@ -157,12 +149,8 @@ def get_crt(account_key, csr, acme_dir, account_email, log=LOGGER, CA=DEFAULT_CA
 
     # get the new certificate
     log.info("Signing certificate...")
-    proc = subprocess.Popen(["openssl", "req", "-in", csr, "-outform", "DER"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    csr_der, err = proc.communicate()
     code, result, headers = _send_signed_request(CA + "/acme/new-cert", {
-        "resource": "new-cert",
-        "csr": _b64(csr_der),
+        "resource": "new-cert", "csr": _b64(_openssl("req", ["-in", csr, "-outform", "DER"])),
     })
     if code != 201:
         raise ValueError("Error signing certificate: {0} {1}".format(code, result))
